@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cena 3D Interativa — Three.js</title>
+    <style>
+      *,
+      *::before,
+      *::after {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        background-color: #0d0d0d;
+        overflow: hidden;
+        font-family: "Segoe UI", sans-serif;
+        color: #e0e0e0;
+      }
+
+      #canvas-container {
+        position: fixed;
+        inset: 0;
+      }
+
+      #hud {
+        position: fixed;
+        bottom: 24px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(0, 0, 0, 0.55);
+        backdrop-filter: blur(8px);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 12px;
+        padding: 10px 20px;
+        font-size: 13px;
+        letter-spacing: 0.04em;
+        color: #ccc;
+        pointer-events: none;
+        white-space: nowrap;
+      }
+
+      #loading-overlay {
+        position: fixed;
+        inset: 0;
+        background: #0d0d0d;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 18px;
+        z-index: 10;
+        transition: opacity 0.6s ease;
+      }
+
+      #loading-overlay.hidden {
+        opacity: 0;
+        pointer-events: none;
+      }
+
+      .spinner {
+        width: 48px;
+        height: 48px;
+        border: 3px solid rgba(255, 255, 255, 0.1);
+        border-top-color: #7eb8f7;
+        border-radius: 50%;
+        animation: spin 0.9s linear infinite;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      #loading-text {
+        font-size: 14px;
+        color: #888;
+        letter-spacing: 0.06em;
+      }
+
+      #model-selector {
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        z-index: 5;
+      }
+
+      #model-selector label {
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: #666;
+      }
+
+      #model-selector select {
+        background: rgba(0, 0, 0, 0.6);
+        backdrop-filter: blur(8px);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        border-radius: 8px;
+        color: #ddd;
+        padding: 8px 12px;
+        font-size: 13px;
+        cursor: pointer;
+        outline: none;
+      }
+
+      #model-selector select:hover {
+        border-color: rgba(126, 184, 247, 0.5);
+      }
+
+      #attribution {
+        position: fixed;
+        top: 16px;
+        left: 20px;
+        font-size: 11px;
+        color: #444;
+        line-height: 1.6;
+        z-index: 5;
+        pointer-events: none;
+      }
+
+      #attribution span {
+        color: #666;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="canvas-container"></div>
+
+    <div id="loading-overlay">
+      <div class="spinner"></div>
+      <p id="loading-text">Carregando modelo 3D…</p>
+    </div>
+
+    <div id="model-selector">
+      <label for="model-select">Modelo</label>
+      <select id="model-select">
+        <option value="DamagedHelmet">Capacete Danificado</option>
+        <option value="Duck">Pato (Duck)</option>
+        <option value="Fox">Raposa</option>
+        <option value="FlightHelmet">Capacete de Voo</option>
+      </select>
+    </div>
+
+    <div id="attribution">
+      <span>Modelos:</span> Khronos Group — glTF-Sample-Assets<br />
+      <span>Licença:</span> CC Attribution 4.0
+    </div>
+
+    <div id="hud">
+      🖱 Arrastar: rotacionar &nbsp;·&nbsp; Scroll: zoom &nbsp;·&nbsp; Clique
+      direito: pan
+    </div>
+
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.168.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.168.0/examples/jsm/"
+        }
+      }
+    </script>
+
+    <script type="module">
+      import * as THREE from "three";
+      import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+      import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+      import { RGBELoader } from "three/addons/loaders/RGBELoader.js";
+
+      const canvasContainer = document.getElementById("canvas-container");
+      const loadingOverlay = document.getElementById("loading-overlay");
+      const loadingText = document.getElementById("loading-text");
+      const modelSelect = document.getElementById("model-select");
+
+      const BASE_URL =
+        "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/";
+
+      const MODEL_PATHS = {
+        DamagedHelmet: "DamagedHelmet/glTF-Binary/DamagedHelmet.glb",
+        Duck: "Duck/glTF-Binary/Duck.glb",
+        Fox: "Fox/glTF-Binary/Fox.glb",
+        FlightHelmet: "FlightHelmet/glTF-Binary/FlightHelmet.glb",
+      };
+
+      const renderer = new THREE.WebGLRenderer({
+        antialias: true,
+        alpha: false,
+      });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.0;
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      canvasContainer.appendChild(renderer.domElement);
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x111318);
+      scene.fog = new THREE.Fog(0x111318, 8, 30);
+
+      const camera = new THREE.PerspectiveCamera(
+        50,
+        window.innerWidth / window.innerHeight,
+        0.01,
+        100
+      );
+      camera.position.set(0, 1.5, 4);
+
+      const controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.06;
+      controls.minDistance = 0.5;
+      controls.maxDistance = 20;
+      controls.target.set(0, 0.5, 0);
+      controls.update();
+
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+      scene.add(ambientLight);
+
+      const directionalLight = new THREE.DirectionalLight(0xfff5e0, 2.5);
+      directionalLight.position.set(4, 8, 4);
+      directionalLight.castShadow = true;
+      directionalLight.shadow.mapSize.width = 2048;
+      directionalLight.shadow.mapSize.height = 2048;
+      directionalLight.shadow.camera.near = 0.1;
+      directionalLight.shadow.camera.far = 50;
+      directionalLight.shadow.camera.left = -5;
+      directionalLight.shadow.camera.right = 5;
+      directionalLight.shadow.camera.top = 5;
+      directionalLight.shadow.camera.bottom = -5;
+      scene.add(directionalLight);
+
+      const fillLight = new THREE.DirectionalLight(0x9bbff7, 0.8);
+      fillLight.position.set(-4, 2, -3);
+      scene.add(fillLight);
+
+      const groundGeometry = new THREE.CircleGeometry(6, 64);
+      const groundMaterial = new THREE.MeshStandardMaterial({
+        color: 0x1a1d24,
+        roughness: 0.9,
+        metalness: 0.0,
+      });
+      const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+      ground.rotation.x = -Math.PI / 2;
+      ground.receiveShadow = true;
+      scene.add(ground);
+
+      let currentModelGroup = null;
+      let currentMixer = null;
+      const clock = new THREE.Clock();
+
+      function loadModel(modelKey) {
+        loadingOverlay.classList.remove("hidden");
+        loadingText.textContent = "Carregando modelo 3D…";
+
+        if (currentModelGroup) {
+          scene.remove(currentModelGroup);
+          currentModelGroup = null;
+        }
+        if (currentMixer) {
+          currentMixer = null;
+        }
+
+        const modelUrl = BASE_URL + MODEL_PATHS[modelKey];
+        const loader = new GLTFLoader();
+
+        loader.load(
+          modelUrl,
+
+          (gltf) => {
+            const modelRoot = gltf.scene;
+
+            modelRoot.traverse((node) => {
+              if (node.isMesh) {
+                node.castShadow = true;
+                node.receiveShadow = true;
+              }
+            });
+
+            const box = new THREE.Box3().setFromObject(modelRoot);
+            const center = box.getCenter(new THREE.Vector3());
+            const size = box.getSize(new THREE.Vector3());
+            const maxDimension = Math.max(size.x, size.y, size.z);
+            const scale = 2.0 / maxDimension;
+
+            modelRoot.position.sub(center.multiplyScalar(scale));
+            modelRoot.scale.setScalar(scale);
+            modelRoot.position.y += size.y * scale * 0.5;
+
+            scene.add(modelRoot);
+            currentModelGroup = modelRoot;
+
+            if (gltf.animations && gltf.animations.length > 0) {
+              currentMixer = new THREE.AnimationMixer(modelRoot);
+              const action = currentMixer.clipAction(gltf.animations[0]);
+              action.play();
+            }
+
+            camera.position.set(0, 1.5, 4);
+            controls.target.set(0, 0.8, 0);
+            controls.update();
+
+            loadingOverlay.classList.add("hidden");
+          },
+
+          (progressEvent) => {
+            if (progressEvent.lengthComputable) {
+              const percent = Math.round(
+                (progressEvent.loaded / progressEvent.total) * 100
+              );
+              loadingText.textContent = `Carregando modelo… ${percent}%`;
+            }
+          },
+
+          (error) => {
+            console.error("Erro ao carregar o modelo GLB:", error);
+            loadingText.textContent =
+              "Erro ao carregar o modelo. Verifique o console.";
+          }
+        );
+      }
+
+      modelSelect.addEventListener("change", () => {
+        loadModel(modelSelect.value);
+      });
+
+      window.addEventListener("resize", () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      });
+
+      function animate() {
+        requestAnimationFrame(animate);
+
+        const delta = clock.getDelta();
+
+        controls.update();
+
+        if (currentMixer) {
+          currentMixer.update(delta);
+        }
+
+        renderer.render(scene, camera);
+      }
+
+      loadModel("DamagedHelmet");
+      animate();
+    </script>
+  </body>
+</html>
